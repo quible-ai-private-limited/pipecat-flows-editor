@@ -184,3 +184,12 @@
   box-shadow: none;
   border: 1px solid var(--border);
 }
+
+/* Embedded view-only preview (/editor?embed=1&view=1): cards, edges and edge
+   labels take no clicks, so the pointer only pans and zooms the canvas.
+   Labels set pointer-events inline, hence !important. */
+.view-only .react-flow__node,
+.view-only .react-flow__edge,
+.view-only .react-flow__edgelabel-renderer * {
+  pointer-events: none !important;
+}

@@ -32,6 +32,7 @@ import StartScreen from "@/components/start/StartScreen";
 import { Button } from "@/components/ui/button";
 import ToastContainer, { showToast } from "@/components/ui/Toast";
 import YamlPanel, { YAML_SLIDE_MS } from "@/components/yaml/YamlPanel";
+import { useEmbedBridge } from "@/hooks/useEmbedBridge";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { deriveCanvasEdges, reconcileEdges } from "@/lib/convert/canvasGraph";
 import { canvasToConfig } from "@/lib/convert/canvasToConfig";
@@ -57,11 +58,18 @@ import {
   isLegacyFlowJson,
 } from "@/lib/document/legacyImport";
 import { serializeFlow } from "@/lib/document/serializeFlow";
+import { flowTextFromPayload, isEmbedMode, isViewMode } from "@/lib/embed/protocol";
+import { flowSnapshot } from "@/lib/embed/snapshot";
 import { type EdgeRoutes, layoutGraph } from "@/lib/layout/autoLayout";
 import { getTemplateByType } from "@/lib/nodes/templates";
 import type { FlowConfig, FlowConfigFunction } from "@/lib/schema/flowConfig";
 import { LEGACY_STORAGE_KEY, loadCurrentFlow, saveCurrentFlow } from "@/lib/storage/localStore";
-import { loadPositions, positionsFromNodes, savePositions } from "@/lib/storage/positionStore";
+import {
+  loadPositions,
+  type NodePositions,
+  positionsFromNodes,
+  savePositions,
+} from "@/lib/storage/positionStore";
 import { useEditorStore } from "@/lib/store/editorStore";
 import { useFlowStore } from "@/lib/store/flowStore";
 import type { CanvasNode } from "@/lib/types/flowTypes";
@@ -172,6 +180,10 @@ function newFlowNodes(): FlowNode[] {
 export default function EditorShell() {
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>([]);
+  // `/editor?embed=1`: inside a host page's iframe (lib/embed/protocol.ts)
+  const [embedded] = useState(() => isEmbedMode(window.location.search));
+  // `&view=1` as well: a read-only preview (no toolbar, panels or edits; pan and zoom only)
+  const [viewOnly] = useState(() => isViewMode(window.location.search));
 
   // Context menu state
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
@@ -293,7 +305,7 @@ export default function EditorShell() {
     (
       text: string,
       flowName: string,
-      options: { silent?: boolean; keepPositions?: boolean } = {}
+      options: { silent?: boolean; keepPositions?: boolean; positions?: NodePositions } = {}
     ): boolean => {
       const legacy = convertLegacyText(text, flowName);
       if (legacy) {
@@ -318,7 +330,8 @@ export default function EditorShell() {
         return false;
       }
       const canvas = configToCanvas(parsed.config, {
-        positions: options.keepPositions ? loadPositions(flowName) : undefined,
+        positions:
+          options.positions ?? (options.keepPositions ? loadPositions(flowName) : undefined),
       });
       const globalFunctions = parsed.config.global_functions ?? [];
       loadFlow({
@@ -375,6 +388,11 @@ export default function EditorShell() {
   useEffect(() => {
     if (hydratedRef.current) return; // React's development double mount
     hydratedRef.current = true;
+    // Embedded, the host page owns the flow: a blank canvas until it sends one
+    if (embedded) {
+      startNewFlow();
+      return;
+    }
     const saved = loadCurrentFlow();
     const legacy = saved ? null : readLegacyAutosave();
     if (saved && !isPristineNewFlow(saved.yaml)) {
@@ -386,6 +404,32 @@ export default function EditorShell() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Embedded in a host page (lib/embed/protocol.ts). The config last synced
+  // since the host loaded a flow; a different one is reported as an edit.
+  const changeBaselineRef = useRef<string | null>(null);
+  const { notifyChanged } = useEmbedBridge(embedded, {
+    onLoad: (payload) => {
+      const text = flowTextFromPayload(payload);
+      if (!text) return false;
+      const keepPositions = !!payload.positions && Object.keys(payload.positions).length > 0;
+      const ok = openFlow(text, payload.flowName ?? DEFAULT_FLOW_NAME, {
+        silent: true,
+        keepPositions,
+        positions: payload.positions,
+      });
+      if (ok) {
+        setShowStart(false);
+        changeBaselineRef.current = null;
+      }
+      return ok;
+    },
+    onNew: () => {
+      startOver();
+      changeBaselineRef.current = null;
+    },
+    snapshot: () => flowSnapshot(nodesRef.current, useFlowStore.getState()),
+  });
 
   // Decision nodes and edges are derived from the config nodes' function
   // entries, and the global card from the global functions. A stale set
@@ -426,8 +470,18 @@ export default function EditorShell() {
     const id = setTimeout(() => {
       const { document, initialNode } = useFlowStore.getState();
       const { text, config } = serializeFlow(nodes, { document, globalFunctions, initialNode });
-      saveCurrentFlow({ flowName, yaml: text });
-      savePositions(flowName, positionsFromNodes(nodes));
+      if (embedded) {
+        const key = stableStringify(config);
+        if (changeBaselineRef.current === null) {
+          changeBaselineRef.current = key;
+        } else if (key !== changeBaselineRef.current) {
+          changeBaselineRef.current = key;
+          notifyChanged();
+        }
+      } else {
+        saveCurrentFlow({ flowName, yaml: text });
+        savePositions(flowName, positionsFromNodes(nodes));
+      }
       if (!sameConfig(config, paneConfigRef.current)) {
         paneConfigRef.current = config;
         setYamlText(text);
@@ -435,7 +489,7 @@ export default function EditorShell() {
       }
     }, 300);
     return () => clearTimeout(id);
-  }, [nodes, globalFunctions, flowName]);
+  }, [nodes, globalFunctions, flowName, embedded, notifyChanged]);
 
   // Pane edits re-parse onto the canvas after a pause in typing. Text that
   // does not parse or match the schema only updates the markers.
@@ -675,8 +729,17 @@ export default function EditorShell() {
     [canvasNodeTypesKey]
   );
 
-  const { theme } = useTheme();
-  const showInspector = !sidebarCollapsed && !showStart;
+  const { theme, setTheme } = useTheme();
+
+  // Embedded, the editor starts light to match the host page; a theme the
+  // user has picked (stored by next-themes under "theme") is kept.
+  useEffect(() => {
+    if (!embedded) return;
+    try {
+      if (!localStorage.getItem("theme")) setTheme("light");
+    } catch {}
+  }, [embedded, setTheme]);
+  const showInspector = !sidebarCollapsed && !showStart && !viewOnly;
   // The inspector stays mounted while its column collapses, so the column is
   // never empty mid-animation; it mounts at once when the column opens.
   const [inspectorMounted, setInspectorMounted] = useState(showInspector);
@@ -704,7 +767,7 @@ export default function EditorShell() {
 
   return (
     <div className="h-screen w-screen flex overflow-hidden">
-      {!showStart && (
+      {!showStart && !viewOnly && (
         <Toolbar
           nodes={nodes}
           onOpenFlow={openFlow}
@@ -733,17 +796,17 @@ export default function EditorShell() {
         />
       )}
       <div
-        className="flex-1 min-w-0 relative overflow-hidden"
+        className={`flex-1 min-w-0 relative overflow-hidden${viewOnly ? " view-only" : ""}`}
         style={{ height: columnHeight }}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("Files")) {
+          if (!viewOnly && e.dataTransfer.types.includes("Files")) {
             e.preventDefault();
             e.dataTransfer.dropEffect = "copy";
           }
         }}
         onDrop={(e) => {
           const file = e.dataTransfer.files?.[0];
-          if (!file) return;
+          if (!file || viewOnly) return;
           e.preventDefault();
           readFlowFile(file)
             .then((text) => {
@@ -779,7 +842,7 @@ export default function EditorShell() {
             </marker>
           </defs>
         </svg>
-        <CanvasActionsContext.Provider value={canvasActions}>
+        <CanvasActionsContext.Provider value={viewOnly ? null : canvasActions}>
           <CanvasNodeTypesContext.Provider value={canvasNodeTypes}>
             <ReactFlow
               colorMode={theme as ColorMode}
@@ -790,6 +853,7 @@ export default function EditorShell() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={(params) => {
+                if (viewOnly) return;
                 const connected = handleConnection(params, configNodes, setConfigNodes);
                 if (!connected) return;
                 selectNode(connected.sourceNodeId, connected.functionIndex, connected.caseIndex);
@@ -805,8 +869,12 @@ export default function EditorShell() {
               snapGrid={[20, 20]}
               // Left-drag selects; middle or right drag pans, as does Space+drag.
               // Trackpads have no middle button, so scrolling pans and pinch zooms.
-              panOnDrag={[1, 2]}
-              selectionOnDrag
+              // View-only: nothing moves, connects or selects, and left-drag pans.
+              panOnDrag={viewOnly ? true : [1, 2]}
+              selectionOnDrag={!viewOnly}
+              nodesDraggable={!viewOnly}
+              nodesConnectable={!viewOnly}
+              elementsSelectable={!viewOnly}
               selectionMode={SelectionMode.Partial}
               panOnScroll
               zoomOnScroll={false}
@@ -816,7 +884,7 @@ export default function EditorShell() {
               minZoom={0.2}
               proOptions={{ hideAttribution: true }}
               onInit={(instance) => setRfInstance(instance as unknown as ReactFlowInstance)}
-              onNodeContextMenu={handleNodeContextMenu}
+              onNodeContextMenu={viewOnly ? undefined : handleNodeContextMenu}
               fitView
             >
               <Controls showInteractive={false} />
@@ -824,14 +892,14 @@ export default function EditorShell() {
             </ReactFlow>
           </CanvasNodeTypesContext.Provider>
         </CanvasActionsContext.Provider>
-        {showStart && (
+        {showStart && !viewOnly && (
           <StartScreen
             onOpenFlow={(text, flowName) => openFlow(text, flowName)}
             onStartFromScratch={() => setShowStart(false)}
             onDismiss={() => setShowStart(false)}
           />
         )}
-        {sidebarCollapsed && (
+        {sidebarCollapsed && !viewOnly && (
           <Button
             variant="secondary"
             size="sm"
@@ -914,7 +982,7 @@ export default function EditorShell() {
           </div>
         )}
       </div>
-      {!showStart && <YamlPanel text={yamlText} problems={yamlProblems} onChange={onYamlChange} />}
+      {!showStart && !viewOnly && <YamlPanel text={yamlText} problems={yamlProblems} onChange={onYamlChange} />}
     </div>
   );
 }

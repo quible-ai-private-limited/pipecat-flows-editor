@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Embed test host</title>
+    <!--
+      A stand-in for the Dashboard: embeds the editor at /editor?embed=1 and
+      exchanges the messages in lib/embed/protocol.ts. Serve it from an origin
+      in NEXT_PUBLIC_EMBED_ALLOWED_ORIGINS, for example:
+        npx --yes serve@14.2.4 tools/embed-test -l 5500
+    -->
+    <style>
+      :root { color-scheme: light dark; font: 13px/1.4 system-ui, sans-serif; }
+      body { margin: 0; display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+      iframe { width: 100%; height: 100%; border: 0; border-right: 1px solid #8884; }
+      aside { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow: auto; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      button { padding: 5px 9px; cursor: pointer; }
+      .status { padding: 6px 8px; border-radius: 4px; background: #8882; }
+      .bad { color: #d33; } .good { color: #2a2; }
+      pre { margin: 0; padding: 6px; background: #8881; white-space: pre-wrap; word-break: break-all;
+            max-height: 30vh; overflow: auto; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <iframe id="editor" title="Flow editor"></iframe>
+    <aside>
+      <label>Editor URL <input id="url" size="34" value="http://localhost:3001/editor?embed=1" /></label>
+      <label><input type="checkbox" id="viewonly" /> View-only preview (adds &amp;view=1, then reloads)</label>
+      <div class="row">
+        <button id="reload">Reload editor</button>
+        <label><input type="file" id="file" accept=".json,.yaml,.yml" hidden /><button id="pick">Load file…</button></label>
+        <button id="new">New flow</button>
+        <button id="get">Get flow (Save)</button>
+        <button id="reopen">Re-open last saved</button>
+        <button id="download" disabled>Download pipecatFlowJson</button>
+      </div>
+      <div class="status" id="status">Waiting for EDITOR_READY…</div>
+      <b>Last FLOW_DATA</b>
+      <pre id="data">(none)</pre>
+      <b>Messages</b>
+      <pre id="log"></pre>
+    </aside>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const frame = $("editor");
+      let editorOrigin = "";
+      let lastData = null;
+      let requestId = 0;
+
+      function log(text) {
+        $("log").textContent = `${new Date().toLocaleTimeString()} ${text}\n` + $("log").textContent;
+      }
+      function status(html) { $("status").innerHTML = html; }
+      function send(message) {
+        frame.contentWindow.postMessage(message, editorOrigin);
+        log(`→ ${message.type}${message.payload ? " " + JSON.stringify(message.payload).slice(0, 80) : ""}`);
+      }
+      function load() {
+        const url = new URL($("url").value);
+        if ($("viewonly").checked) url.searchParams.set("view", "1");
+        else url.searchParams.delete("view");
+        editorOrigin = url.origin;
+        status("Waiting for EDITOR_READY…");
+        frame.src = url.href;
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== editorOrigin || event.source !== frame.contentWindow) {
+          log(`ignored a message from ${event.origin}`);
+          return;
+        }
+        const m = event.data;
+        log(`← ${m.type}${m.ok !== undefined ? " ok=" + m.ok : ""}${m.error ? " " + m.error : ""}`);
+        if (m.type === "EDITOR_READY") status('<span class="good">Editor ready.</span> Load a file or start a new flow.');
+        if (m.type === "FLOW_LOADED") status(m.ok ? '<span class="good">Flow opened.</span>' : `<span class="bad">Could not open the flow: ${m.error}</span>`);
+        if (m.type === "FLOW_CHANGED") status('<span class="bad">Unsaved changes</span>');
+        if (m.type === "FLOW_DATA") {
+          lastData = m.payload;
+          $("download").disabled = false;
+          const errors = m.payload.issues.filter((i) => i.level === "error");
+          status(m.payload.hasErrors
+            ? `<span class="bad">Not saved: ${errors.length} error(s).</span> ${errors.map((i) => i.message).join("; ")}`
+            : `<span class="good">Saved (request ${m.requestId}).</span> ${m.payload.issues.length} warning(s).`);
+          $("data").textContent = JSON.stringify(
+            { flowName: m.payload.flowName, hasErrors: m.payload.hasErrors, issues: m.payload.issues,
+              nodes: Object.keys(m.payload.flow.nodes ?? {}), positions: m.payload.positions,
+              flow: m.payload.flow }, null, 2);
+        }
+      });
+
+      $("reload").onclick = load;
+      $("viewonly").onchange = load;
+      $("pick").onclick = () => $("file").click();
+      $("file").onchange = async () => {
+        const file = $("file").files[0];
+        if (!file) return;
+        const text = await file.text();
+        const flowName = file.name.replace(/\.(json|ya?ml)$/i, "");
+        let payload = { flowName, yaml: text };
+        if (/\.json$/i.test(file.name)) {
+          // A saved version's data, or a FlowConfig on its own
+          const json = JSON.parse(text);
+          const flow = json.pipecatFlowJson ?? json;
+          payload = { flowName, flow, yaml: json.pipecatFlowYaml, positions: json.pipecatFlowPositions };
+        }
+        send({ type: "LOAD_FLOW", payload });
+        $("file").value = "";
+      };
+      $("new").onclick = () => send({ type: "NEW_FLOW" });
+      $("get").onclick = () => send({ type: "GET_FLOW", requestId: ++requestId });
+      $("reopen").onclick = () => {
+        if (!lastData) return status('<span class="bad">Get the flow first.</span>');
+        send({ type: "LOAD_FLOW", payload: { flowName: lastData.flowName, yaml: lastData.yaml, positions: lastData.positions } });
+      };
+      $("download").onclick = () => {
+        const blob = new Blob([JSON.stringify(lastData.flow, null, 2)], { type: "application/json" });
+        const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${lastData.flowName}_flowconfig.json` });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+      load();
+    </script>
+  </body>
+</html>
