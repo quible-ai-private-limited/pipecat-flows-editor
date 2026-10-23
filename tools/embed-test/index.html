@@ -86,6 +86,7 @@
           $("data").textContent = JSON.stringify(
             { flowName: m.payload.flowName, hasErrors: m.payload.hasErrors, issues: m.payload.issues,
               nodes: Object.keys(m.payload.flow.nodes ?? {}), positions: m.payload.positions,
+              initialMessage: m.payload.initialMessage,
               flow: m.payload.flow }, null, 2);
         }
       });
@@ -103,7 +104,7 @@
           // A saved version's data, or a FlowConfig on its own
           const json = JSON.parse(text);
           const flow = json.pipecatFlowJson ?? json;
-          payload = { flowName, flow, yaml: json.pipecatFlowYaml, positions: json.pipecatFlowPositions };
+          payload = { flowName, flow, yaml: json.pipecatFlowYaml, positions: json.pipecatFlowPositions, initialMessage: json.initialMessage };
         }
         send({ type: "LOAD_FLOW", payload });
         $("file").value = "";
@@ -112,7 +113,7 @@
       $("get").onclick = () => send({ type: "GET_FLOW", requestId: ++requestId });
       $("reopen").onclick = () => {
         if (!lastData) return status('<span class="bad">Get the flow first.</span>');
-        send({ type: "LOAD_FLOW", payload: { flowName: lastData.flowName, yaml: lastData.yaml, positions: lastData.positions } });
+        send({ type: "LOAD_FLOW", payload: { flowName: lastData.flowName, yaml: lastData.yaml, positions: lastData.positions, initialMessage: lastData.initialMessage } });
       };
       $("download").onclick = () => {
         const blob = new Blob([JSON.stringify(lastData.flow, null, 2)], { type: "application/json" });

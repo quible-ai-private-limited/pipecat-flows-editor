@@ -27,6 +27,8 @@ export interface LoadFlowPayload {
   flow?: unknown;
   /** Canvas positions as last saved, keyed by canvas node id. */
   positions?: NodePositions;
+  /** The message the call opens with, as last saved (kept outside the FlowConfig). */
+  initialMessage?: string;
 }
 
 /** Sent by the editor. */
@@ -43,6 +45,11 @@ export interface FlowDataPayload {
   /** The same flow as YAML text, with the comments it was opened with. */
   yaml: string;
   positions: NodePositions;
+  /**
+   * The message the call opens with, from the initial node's General tab.
+   * Saved by the host next to the flow; not part of the FlowConfig.
+   */
+  initialMessage: string;
   /** Schema and reference errors, or the graph warnings when there are none. */
   issues: FlowIssue[];
   /** True when Pipecat would refuse to load the flow. */
@@ -109,7 +116,10 @@ export function parseHostMessage(data: unknown): HostMessage | null {
     case "LOAD_FLOW": {
       const payload = message.payload;
       if (typeof payload !== "object" || payload === null) return null;
-      const { flowName, yaml, flow, positions } = payload as Record<string, unknown>;
+      const { flowName, yaml, flow, positions, initialMessage } = payload as Record<
+        string,
+        unknown
+      >;
       return {
         type: "LOAD_FLOW",
         payload: {
@@ -117,6 +127,7 @@ export function parseHostMessage(data: unknown): HostMessage | null {
           yaml: typeof yaml === "string" && yaml.trim() ? yaml : undefined,
           flow: typeof flow === "object" && flow !== null ? flow : undefined,
           positions: isPositions(positions) ? positions : undefined,
+          initialMessage: typeof initialMessage === "string" ? initialMessage : undefined,
         },
       };
     }

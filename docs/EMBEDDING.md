@@ -23,12 +23,12 @@ When embedded, the editor does not restore or autosave its browser draft. The Da
 | Direction | Message | Meaning |
 |---|---|---|
 | editor → Dashboard | `{type: "EDITOR_READY"}` | Ready. Answer with `LOAD_FLOW` or `NEW_FLOW`. |
-| Dashboard → editor | `{type: "LOAD_FLOW", payload: {flowName, yaml?, flow?, positions?}}` | Open a saved flow. `yaml` is preferred because it keeps comments. Otherwise `flow` (a FlowConfig object) is used. `positions` restores the canvas layout. Without it, the flow is laid out automatically. |
+| Dashboard → editor | `{type: "LOAD_FLOW", payload: {flowName, yaml?, flow?, positions?, initialMessage?}}` | Open a saved flow. `yaml` is preferred because it keeps comments. Otherwise `flow` (a FlowConfig object) is used. `positions` restores the canvas layout. Without it, the flow is laid out automatically. `initialMessage` fills the initial node's **Initial Message** field. |
 | editor → Dashboard | `{type: "FLOW_LOADED", ok, error?}` | The result of `LOAD_FLOW`. **If `ok` is false, do not let Save overwrite the stored flow.** |
 | Dashboard → editor | `{type: "NEW_FLOW"}` | No flow yet. The editor shows its start screen. |
 | Dashboard → editor | `{type: "GET_FLOW", requestId?}` | Send this when the user clicks Save. |
-| editor → Dashboard | `{type: "FLOW_DATA", requestId, payload: {flowName, flow, yaml, positions, issues, hasErrors}}` | The current flow. **If `hasErrors` is true, do not save.** Show the `issues` with `level: "error"` instead, because Pipecat would refuse that flow at call time. |
-| editor → Dashboard | `{type: "FLOW_CHANGED"}` | The flow was edited. Mark it unsaved, and clear the mark after a successful save. Moving cards only does not count as an edit. |
+| editor → Dashboard | `{type: "FLOW_DATA", requestId, payload: {flowName, flow, yaml, positions, initialMessage, issues, hasErrors}}` | The current flow. **If `hasErrors` is true, do not save.** Show the `issues` with `level: "error"` instead, because Pipecat would refuse that flow at call time. |
+| editor → Dashboard | `{type: "FLOW_CHANGED"}` | The flow was edited. Mark it unsaved, and clear the mark after a successful save. Moving cards only does not count as an edit. Editing the Initial Message does. |
 
 The Dashboard should accept messages only when `event.origin` is the editor's origin and `event.source` is the iframe's window. It should post to the editor's origin, not `"*"`.
 
@@ -45,12 +45,15 @@ Save through the existing `POST /conversationFlow/saveconversationflow`, which c
     "pipecatFlowJson": "<payload.flow>",
     "pipecatFlowYaml": "<payload.yaml>",
     "pipecatFlowPositions": "<payload.positions>",
+    "initialMessage": "<payload.initialMessage>",
     "savedAt": "<ISO time>"
   }
 }
 ```
 
-The Pipecat agent runs `pipecatFlowJson`. To load a version, send `LOAD_FLOW` with `yaml: data.pipecatFlowYaml`, `flow: data.pipecatFlowJson` and `positions: data.pipecatFlowPositions`. A version saved by the old editor (a `nodes` list) is converted when it is opened.
+The Pipecat agent runs `pipecatFlowJson`. To load a version, send `LOAD_FLOW` with `yaml: data.pipecatFlowYaml`, `flow: data.pipecatFlowJson`, `positions: data.pipecatFlowPositions` and `initialMessage: data.initialMessage`.
+
+**Initial message.** Embedded, the initial node's General tab has an **Initial Message** field: the message the call opens with, spoken word for word before the node runs. It is kept outside the FlowConfig because Pipecat rejects fields it does not know, so the Dashboard saves it next to the flow as `data.initialMessage`. At call time the backend sends it as the call's first message, and voice_v2 fills `{variable}` from the agent's Variables. An empty message becomes "Hello! How can I help you today?". A version saved by the old editor (a `nodes` list) is converted when it is opened.
 
 ## Trying it locally
 
