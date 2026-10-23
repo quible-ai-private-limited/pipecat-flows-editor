@@ -211,6 +211,7 @@ export default function EditorShell() {
   const resetFlow = useFlowStore((state) => state.reset);
   const flowName = useFlowStore((state) => state.flowName);
   const globalFunctions = useFlowStore((state) => state.globalFunctions);
+  const initialMessage = useFlowStore((state) => state.initialMessage);
   const showStart = useEditorStore((state) => state.showStart);
   const setShowStart = useEditorStore((state) => state.setShowStart);
   const showYaml = useEditorStore((state) => state.showYaml);
@@ -419,13 +420,14 @@ export default function EditorShell() {
         positions: payload.positions,
       });
       if (ok) {
+        useFlowStore.getState().setInitialMessage(payload.initialMessage ?? "");
         setShowStart(false);
         changeBaselineRef.current = null;
       }
       return ok;
     },
     onNew: () => {
-      startOver();
+      startOver(); // also clears the initial message
       changeBaselineRef.current = null;
     },
     snapshot: () => flowSnapshot(nodesRef.current, useFlowStore.getState()),
@@ -471,7 +473,8 @@ export default function EditorShell() {
       const { document, initialNode } = useFlowStore.getState();
       const { text, config } = serializeFlow(nodes, { document, globalFunctions, initialNode });
       if (embedded) {
-        const key = stableStringify(config);
+        // The initial message is saved with the flow, so editing it is an edit too
+        const key = stableStringify({ config, initialMessage });
         if (changeBaselineRef.current === null) {
           changeBaselineRef.current = key;
         } else if (key !== changeBaselineRef.current) {
@@ -489,7 +492,7 @@ export default function EditorShell() {
       }
     }, 300);
     return () => clearTimeout(id);
-  }, [nodes, globalFunctions, flowName, embedded, notifyChanged]);
+  }, [nodes, globalFunctions, flowName, initialMessage, embedded, notifyChanged]);
 
   // Pane edits re-parse onto the canvas after a pause in typing. Text that
   // does not parse or match the schema only updates the markers.
@@ -944,6 +947,7 @@ export default function EditorShell() {
             <CanvasActionsContext.Provider value={canvasActions}>
               <InspectorPanel
                 nodes={configNodes}
+                showInitialMessage={embedded}
                 availableNodeIds={configNodes.map((n) => n.id)}
                 onChange={(next) => {
                   if (!selectedNodeId || selectedNodeId !== next.id) return;

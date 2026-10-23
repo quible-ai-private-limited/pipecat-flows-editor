@@ -33,7 +33,7 @@ nodes:
       - type: end_conversation
 `;
 
-function snapshotOf(yaml: string) {
+function snapshotOf(yaml: string, initialMessage = "") {
   const parsed = parseFlowYaml(yaml);
   if (!parsed.config) throw new Error("fixture does not parse");
   const canvas = configToCanvas(parsed.config);
@@ -42,6 +42,7 @@ function snapshotOf(yaml: string) {
     document: parsed.document,
     globalFunctions: parsed.config.global_functions ?? [],
     initialNode: parsed.config.initial_node,
+    initialMessage,
   });
 }
 
@@ -91,8 +92,24 @@ describe("embed protocol", () => {
       })
     ).toEqual({
       type: "LOAD_FLOW",
-      payload: { flowName: "timesheet", yaml: FLOW_YAML, flow: undefined, positions: undefined },
+      payload: {
+        flowName: "timesheet",
+        yaml: FLOW_YAML,
+        flow: undefined,
+        positions: undefined,
+        initialMessage: undefined,
+      },
     });
+  });
+
+  it("passes the initial message on with LOAD_FLOW, and only as text", () => {
+    const load = (initialMessage: unknown) =>
+      parseHostMessage({ type: "LOAD_FLOW", payload: { yaml: FLOW_YAML, initialMessage } });
+    expect(load("This call will be recorded. Hello,")).toMatchObject({
+      payload: { initialMessage: "This call will be recorded. Hello," },
+    });
+    expect(load("")).toMatchObject({ payload: { initialMessage: "" } });
+    expect(load(42)).toMatchObject({ payload: { initialMessage: undefined } });
   });
 
   it("opens the YAML when there is one, else the FlowConfig as JSON", () => {
@@ -113,6 +130,14 @@ describe("flow snapshot", () => {
     expect(parseFlowYaml(data.yaml).config).toEqual(data.flow);
     expect(Object.keys(data.positions)).toEqual(expect.arrayContaining(["greeting", "goodbye"]));
     expect(JSON.parse(JSON.stringify(data))).toEqual(data); // plain data, safe to post
+  });
+
+  it("returns the initial message next to the flow, never inside the FlowConfig", () => {
+    const data = snapshotOf(FLOW_YAML, "This call will be recorded. Hello,");
+    expect(data.initialMessage).toBe("This call will be recorded. Hello,");
+    expect(data.hasErrors).toBe(false);
+    expect(JSON.stringify(data.flow)).not.toContain("This call will be recorded");
+    expect(data.yaml).not.toContain("This call will be recorded");
   });
 
   it("reports the errors Pipecat would refuse the flow for", () => {

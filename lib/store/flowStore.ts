@@ -23,19 +23,27 @@ export interface LoadedFlow {
 }
 
 interface FlowState extends LoadedFlow {
+  /**
+   * Embedded only: the message the call opens with, which the host page saves
+   * next to the flow. It is not part of the FlowConfig, since Pipecat rejects
+   * fields it does not know.
+   */
+  initialMessage: string;
   loadFlow: (flow: LoadedFlow) => void;
   setFlowName: (flowName: string) => void;
   setDocument: (document: Document | null) => void;
   setGlobalFunctions: (globalFunctions: FlowConfigFunction[]) => void;
   setInitialNode: (initialNode: string) => void;
+  setInitialMessage: (initialMessage: string) => void;
   reset: () => void;
 }
 
-const initialState: LoadedFlow = {
+const initialState: LoadedFlow & { initialMessage: string } = {
   flowName: DEFAULT_FLOW_NAME,
   document: null,
   globalFunctions: [],
   initialNode: "",
+  initialMessage: "",
 };
 
 export const useFlowStore = create<FlowState>((set) => ({
@@ -45,5 +53,6 @@ export const useFlowStore = create<FlowState>((set) => ({
   setDocument: (document) => set({ document }),
   setGlobalFunctions: (globalFunctions) => set({ globalFunctions }),
   setInitialNode: (initialNode) => set({ initialNode }),
+  setInitialMessage: (initialMessage) => set({ initialMessage }),
   reset: () => set(initialState),
 }));

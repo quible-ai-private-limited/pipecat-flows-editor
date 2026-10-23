@@ -1,6 +1,7 @@
 /**
  * The flow on the canvas as the host page saves it: the FlowConfig, its YAML,
- * the canvas positions, and the same checks the editor shows.
+ * the canvas positions, the call's initial message, and the same checks the
+ * editor shows.
  */
 
 import type { Document } from "yaml";
@@ -21,6 +22,7 @@ export function flowSnapshot(
     document: Document | null;
     globalFunctions: FlowConfigFunction[];
     initialNode: string;
+    initialMessage: string;
   }
 ): FlowDataPayload {
   const { text, config } = serializeFlow(nodes, {
@@ -46,6 +48,7 @@ export function flowSnapshot(
     flow: parsed.config ?? config,
     yaml: text,
     positions: positionsFromNodes(nodes),
+    initialMessage: state.initialMessage,
     issues,
     hasErrors: hasFlowErrors(parsed),
   };

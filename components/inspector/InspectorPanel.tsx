@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { configNodeFromData } from "@/lib/convert/canvasToConfig";
 import type { CanvasNode, ConfigNodeData } from "@/lib/convert/configToCanvas";
 import { useEditorStore } from "@/lib/store/editorStore";
+import { useFlowStore } from "@/lib/store/flowStore";
 import { generateNodeIdFromLabel } from "@/lib/utils/nodeId";
 
 import FlowPanel from "./FlowPanel";
@@ -28,6 +29,8 @@ type Props = {
   onDelete: (id: string, kind: "node" | "edge") => void;
   onRenameNode?: (oldId: string, newId: string) => void;
   availableNodeIds?: string[];
+  /** Embedded in the Quibble Dashboard: the initial node edits the call's initial message. */
+  showInitialMessage?: boolean;
 };
 
 export default function InspectorPanel({
@@ -36,7 +39,10 @@ export default function InspectorPanel({
   onDelete,
   onRenameNode,
   availableNodeIds = [],
+  showInitialMessage = false,
 }: Props) {
+  const initialMessage = useFlowStore((state) => state.initialMessage);
+  const setInitialMessage = useFlowStore((state) => state.setInitialMessage);
   const selectedNodeId = useEditorStore((state) => state.selectedNodeId);
   const selectedFunctionIndex = useEditorStore((state) => state.selectedFunctionIndex);
   const inspectorPanelWidth = useEditorStore((state) => state.inspectorPanelWidth);
@@ -303,6 +309,31 @@ export default function InspectorPanel({
               onChange={(strategy) => update({ context_strategy: strategy })}
             />
           </div>
+          {showInitialMessage && displayedType === "initial" && (
+            <div className="border-t pt-3 space-y-2">
+              <div className="flex items-baseline gap-2">
+                <label
+                  htmlFor="initial-message"
+                  className="block text-[13px] font-medium text-foreground"
+                >
+                  Initial Message
+                </label>
+                <span className={FIELD_TAG_CLASS}>optional</span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Spoken word for word as the call starts, before this node runs; the caller cannot
+                cut in. {"{variable}"} uses the agent&apos;s Variables. Empty: &quot;Hello! How can
+                I help you today?&quot;
+              </div>
+              <Textarea
+                id="initial-message"
+                className="min-h-24 text-[13px]"
+                value={initialMessage}
+                onChange={(e) => setInitialMessage(e.target.value)}
+                placeholder="Hello! How can I help you today?"
+              />
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent
